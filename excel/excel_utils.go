@@ -17,6 +17,7 @@ type ReadExcelResp struct {
 	F         *excelize.File
 	RowData   [][]string
 	MergeCell []excelize.MergeCell
+	SheetList []string
 }
 
 func ReadExcel(req *ReadExcelReq) (resp *ReadExcelResp) {
@@ -31,6 +32,7 @@ func ReadExcel(req *ReadExcelReq) (resp *ReadExcelResp) {
 		fmt.Println(err)
 		return
 	}
+	resp.SheetList = resp.F.GetSheetList()
 	resp.MergeCell, resp.Err = resp.F.GetMergeCells(req.SheetName)
 	resp.MergeCell = sortMergeCells(resp.MergeCell)
 	if resp.Err != nil {
