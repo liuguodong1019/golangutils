@@ -85,7 +85,12 @@ func NumToExcelColumn(n int) string {
 	}
 	return result
 }
-
+//索引转列名
+func ExcelizeIndexToColName(index int) string {
+	var colName string
+	colName,_ = excelize.ColumnNumberToName(index)
+	return colName
+}
 // 合并的单元格排序
 // 示例：[[B100:B104 ] [C100:C104 ] [D100:D104 ] [E100:E104 ] [F100:F104 ] [B105:B107 ]
 func colToNum(col string) int {
