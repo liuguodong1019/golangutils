@@ -102,7 +102,7 @@ func DiffSliceInt[T comparable](a, b []T) (toInsert []T, toDelete []T) {
 }
 
 // 交集
-func IntersectInt[T comparable](a, b []T) []T {
+func Intersection[T comparable](a, b []T) []T {
 	if len(a) == 0 || len(b) == 0 {
 		return nil
 	}
