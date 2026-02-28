@@ -219,3 +219,115 @@ func GetCellValueWithoutStrike(f *excelize.File, sheet, axis string) (string, er
 
 	return result.String(), nil
 }
+// 判断单元格是否被合并
+func IsMergeCell(mergeCells []excelize.MergeCell, sheetName, cell string) bool {
+	for _, mergeCell := range mergeCells {
+		if mergeCell.GetStartAxis() == cell || mergeCell.GetEndAxis() == cell || (cell > mergeCell.GetStartAxis() && cell < mergeCell.GetEndAxis()) {
+			return true
+		}
+	}
+	return false
+}
+// 获取某个单元格（含合并区域）最终值
+func GetMergedCellValue(f *excelize.File, sheet, axis string) (string, error) {
+	mergeCells, err := f.GetMergeCells(sheet)
+	if err != nil {
+		return "", err
+	}
+
+	// 把当前 axis 转成坐标
+	col, row, err := excelize.CellNameToCoordinates(axis)
+	if err != nil {
+		return "", err
+	}
+
+	for _, mc := range mergeCells {
+		start := mc.GetStartAxis()
+		end := mc.GetEndAxis()
+
+		startCol, startRow, _ := excelize.CellNameToCoordinates(start)
+		endCol, endRow, _ := excelize.CellNameToCoordinates(end)
+
+		// 判断是否在合并区域内
+		if col >= startCol && col <= endCol &&
+			row >= startRow && row <= endRow {
+
+			// 返回起始单元格的值
+			return f.GetCellValue(sheet, start)
+		}
+	}
+
+	// 不在合并区域，正常取值
+	return f.GetCellValue(sheet, axis)
+}
+
+// 示例，行数范围是34-89，将其中B列中，单个单元格的值和合并的单元格最终值取出来
+/*
+B34:B36 合并 = OPEN
+B37 = CLOSE
+B38:B40 合并 = RESET
+B43:B67 合并 = OPEN
+
+正确结果应该是：
+OPEN
+CLOSE
+RESET
+OPEN
+*/
+func GetColumnMergedFinalValues(
+	f *excelize.File,
+	sheet string,
+	startRow, endRow int,
+	colIndex int, // 列索引，从1开始，例如 B=2
+) ([]string, error) {
+
+	var result []string
+	mergeCells, err := f.GetMergeCells(sheet)
+	if err != nil {
+		return nil, err
+	}
+
+	// 用于避免同一个合并块被加入多次
+	visitedMerge := make(map[string]bool)
+
+	for row := startRow; row <= endRow; row++ {
+
+		axis, _ := excelize.CoordinatesToCellName(colIndex, row)
+		col, r := colIndex, row
+
+		isMerged := false
+
+		for _, mc := range mergeCells {
+
+			start := mc.GetStartAxis()
+			end := mc.GetEndAxis()
+
+			startCol, startRowM, _ := excelize.CellNameToCoordinates(start)
+			endCol, endRowM, _ := excelize.CellNameToCoordinates(end)
+
+			// 判断当前单元格是否属于这个合并区域
+			if col >= startCol && col <= endCol &&
+				r >= startRowM && r <= endRowM {
+
+				isMerged = true
+
+				// 如果这个合并区域还没加入过
+				if !visitedMerge[start] {
+					val, _ := f.GetCellValue(sheet, start)
+					result = append(result, val)
+					visitedMerge[start] = true
+				}
+
+				break
+			}
+		}
+
+		// 如果不是合并单元格
+		if !isMerged {
+			val, _ := f.GetCellValue(sheet, axis)
+			result = append(result, val)
+		}
+	}
+
+	return result, nil
+}
