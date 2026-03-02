@@ -252,3 +252,332 @@ func IsMergeCell(mergeCells []excelize.MergeCell, sheetName, cell string) bool {
 	}
 	return false
 }
+
+// 索引转坐标
+func IndexToAxis(col, row int) string {
+	axis, _ := excelize.CoordinatesToCellName(col, row)
+	return axis
+}
+
+// 获取某个单元格（含合并区域）最终值
+func GetMergedCellValue(f *excelize.File, sheet, axis string) (string, error) {
+	mergeCells, err := f.GetMergeCells(sheet)
+	if err != nil {
+		return "", err
+	}
+
+	// 把当前 axis 转成坐标
+	col, row, err := excelize.CellNameToCoordinates(axis)
+	if err != nil {
+		return "", err
+	}
+
+	for _, mc := range mergeCells {
+		start := mc.GetStartAxis()
+		end := mc.GetEndAxis()
+
+		startCol, startRow, _ := excelize.CellNameToCoordinates(start)
+		endCol, endRow, _ := excelize.CellNameToCoordinates(end)
+
+		// 判断是否在合并区域内
+		if col >= startCol && col <= endCol &&
+			row >= startRow && row <= endRow {
+
+			// 返回起始单元格的值
+			return f.GetCellValue(sheet, start)
+		}
+	}
+
+	// 不在合并区域，正常取值
+	return f.GetCellValue(sheet, axis)
+}
+
+// 示例，行数范围是34-89，将其中B列中，单个单元格的值和合并的单元格最终值取出来
+/*
+B34:B36 合并 = OPEN
+B37 = CLOSE
+B38:B40 合并 = RESET
+B43:B67 合并 = OPEN
+
+正确结果应该是：
+OPEN
+CLOSE
+RESET
+OPEN
+*/
+func GetColumnMergedFinalValues(
+	f *excelize.File,
+	sheet string,
+	startRow, endRow int,
+	colIndex int, // 列索引，从1开始，例如 B=2
+) ([]string, error) {
+	var result []string
+	mergeCells, err := f.GetMergeCells(sheet)
+	if err != nil {
+		return nil, err
+	}
+	// 用于避免同一个合并块被加入多次
+	visitedMerge := make(map[string]bool)
+	for row := startRow; row <= endRow; row++ {
+		axis, _ := excelize.CoordinatesToCellName(colIndex, row)
+		col, r := colIndex, row
+		isMerged := false
+		for _, mc := range mergeCells {
+			start := mc.GetStartAxis()
+			end := mc.GetEndAxis()
+			startCol, startRowM, _ := excelize.CellNameToCoordinates(start)
+			endCol, endRowM, _ := excelize.CellNameToCoordinates(end)
+			// 判断当前单元格是否属于这个合并区域
+			if col >= startCol && col <= endCol &&
+				r >= startRowM && r <= endRowM {
+				isMerged = true
+				// 如果这个合并区域还没加入过
+				if !visitedMerge[start] {
+					//val, _ := f.GetCellValue(sheet, start)
+					val, _ := GetCellValueWithoutStrike(f, sheet, start)
+					result = append(result, val)
+					visitedMerge[start] = true
+				}
+				break
+			}
+		}
+		// 如果不是合并单元格
+		if !isMerged {
+			//val, _ := f.GetCellValue(sheet, axis)
+			val, _ := GetCellValueWithoutStrike(f, sheet, axis)
+			result = append(result, val)
+		}
+	}
+
+	return result, nil
+}
+
+// 是否单元格所有内容统一设置了删除线
+func IsCellStrike(f *excelize.File, sheet, axis string) (bool, error) {
+	styleID, err := f.GetCellStyle(sheet, axis)
+	if err != nil {
+		return false, err
+	}
+	style, err := f.GetStyle(styleID)
+	if err != nil {
+		return false, err
+	}
+	if style.Font != nil && style.Font.Strike {
+		return true, nil
+	}
+	return false, nil
+}
+
+// 单元格内容是否包含了删除线  示例：RESET：复位/还原/重置,只有“重置”被删除线删除
+func HasStrikeInRichText(f *excelize.File, sheet, axis string) (bool, error) {
+	richText, err := f.GetCellRichText(sheet, axis)
+	if err != nil {
+		return false, err
+	}
+	for _, rt := range richText {
+		if rt.Font != nil && rt.Font.Strike {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// 不确认单元格是所有内容都被删除线删除还是部分内容被删除线删除
+func IsCellHasStrike(f *excelize.File, sheet, axis string) (bool, error) {
+	// 1️⃣ 先检查富文本
+	richText, err := f.GetCellRichText(sheet, axis)
+	if err == nil && len(richText) > 0 {
+		for _, rt := range richText {
+			if rt.Font != nil && rt.Font.Strike {
+				return true, nil
+			}
+		}
+	}
+	// 2️⃣ 再检查整格样式
+	styleID, err := f.GetCellStyle(sheet, axis)
+	if err != nil {
+		return false, err
+	}
+	style, err := f.GetStyle(styleID)
+	if err != nil {
+		return false, err
+	}
+	if style.Font != nil && style.Font.Strike {
+		return true, nil
+	}
+	return false, nil
+}
+
+type Resp struct {
+	Name      string
+	TargetMap map[string][]string
+}
+
+// 通过主列获取主列及目标的内容
+/*
+主列F,目标列G,H,I，  F8-F10是合并单元格：type，G8、G9、G10；H8、H9、H10又不是合并单元格，I8、I9、I10又是合并单元格
+返回格式：['type' => ['G' => [],'H' => [],'I' => [] ]]
+*/
+func GetGroupedByRealBlock(
+	f *excelize.File,
+	sheet string,
+	startRow, endRow int,
+	mainColIndex int, //主列
+	targetColIndexes []int, //目标列
+) ([]Resp, error) {
+
+	var result []Resp
+
+	mergeCells, err := f.GetMergeCells(sheet)
+	if err != nil {
+		return nil, err
+	}
+
+	// 构建：row -> 合并块起始行
+	rowToMergeStart := make(map[int]int)
+
+	for _, mc := range mergeCells {
+
+		start := mc.GetStartAxis()
+		end := mc.GetEndAxis()
+
+		startCol, startRowM, _ := excelize.CellNameToCoordinates(start)
+		_, endRowM, _ := excelize.CellNameToCoordinates(end)
+
+		if startCol != mainColIndex {
+			continue
+		}
+
+		for r := startRowM; r <= endRowM; r++ {
+			rowToMergeStart[r] = startRowM
+		}
+	}
+
+	for row := startRow; row <= endRow; row++ {
+
+		blockStartRow := row
+
+		// 如果属于合并块
+		if startRowM, ok := rowToMergeStart[row]; ok {
+			blockStartRow = startRowM
+			// 只在合并块的第一行创建结构
+			if row != startRowM {
+				continue
+			}
+		}
+
+		mainAxis, _ := excelize.CoordinatesToCellName(mainColIndex, blockStartRow)
+		mainValue, _ := GetCellValueWithoutStrike(f, sheet, mainAxis)
+		if mainValue == "" {
+			continue
+		}
+
+		resp := Resp{
+			Name:      mainValue,
+			TargetMap: make(map[string][]string),
+		}
+
+		// 收集该块的所有行
+		blockEndRow := blockStartRow
+		if _, ok := rowToMergeStart[row]; ok {
+			// 找到这个合并块的结束行
+			for r := row; r <= endRow; r++ {
+				if rowToMergeStart[r] != blockStartRow {
+					break
+				}
+				blockEndRow = r
+			}
+		}
+
+		// 收集子列
+		for r := blockStartRow; r <= blockEndRow; r++ {
+			for _, targetCol := range targetColIndexes {
+
+				targetAxis, _ := excelize.CoordinatesToCellName(targetCol, r)
+
+				// 判断该单元格是否是合并块
+				merged := false
+				mergeStartRow := 0
+
+				for _, mc := range mergeCells {
+
+					start := mc.GetStartAxis()
+					end := mc.GetEndAxis()
+
+					startCol, startRowM, _ := excelize.CellNameToCoordinates(start)
+					endCol, endRowM, _ := excelize.CellNameToCoordinates(end)
+
+					if targetCol >= startCol && targetCol <= endCol &&
+						r >= startRowM && r <= endRowM {
+
+						merged = true
+						mergeStartRow = startRowM
+						break
+					}
+				}
+
+				// 如果是合并块，但不是起始行 → 跳过
+				if merged && r != mergeStartRow {
+					continue
+				}
+
+				targetValue, _ := GetCellValueWithoutStrike(f, sheet, targetAxis)
+				if targetValue == "" {
+					continue
+				}
+
+				colName, _ := excelize.ColumnNumberToName(targetCol)
+				resp.TargetMap[colName] = append(
+					resp.TargetMap[colName],
+					targetValue,
+				)
+			}
+		}
+
+		result = append(result, resp)
+	}
+
+	return result, nil
+}
+
+// 获取合并的单元格起始坐标
+func MergeCellStartAndEndIndex(f *excelize.File, sheet string, cell int, rowIndex int) (startRow, endRow int) {
+	cell = cell + 1
+	mergeCells, _ := f.GetMergeCells(sheet, true)
+	cellName, _ := excelize.ColumnNumberToName(cell)
+	for _, v := range mergeCells {
+		if strings.HasPrefix(v.GetStartAxis(), cellName) && strings.HasPrefix(v.GetEndAxis(), cellName) {
+			startRow, _ = strconv.Atoi(strings.TrimPrefix(v.GetStartAxis(), cellName))
+			endRow, _ = strconv.Atoi(strings.TrimPrefix(v.GetEndAxis(), cellName))
+			if rowIndex == startRow || rowIndex == endRow || rowIndex > startRow && rowIndex < endRow {
+				return
+			}
+		}
+	}
+	return 0, 0
+}
+
+// 获取工作表最大列的数量
+func GetMaxColLen(f *excelize.File, sheet string) int {
+	rows, _ := f.GetRows(sheet)
+	maxCol := 0
+	for _, r := range rows {
+		if len(r) > maxCol {
+			maxCol = len(r)
+		}
+	}
+	return maxCol
+}
+
+// 判断是否属于合并行
+func IsMergeRow(f *excelize.File, sheet string, rowIndex int) bool {
+	mergeCell, _ := f.GetMergeCells(sheet)
+	for _, v := range mergeCell {
+		s, _ := strconv.Atoi(v.GetStartAxis())
+		e, _ := strconv.Atoi(v.GetEndAxis())
+		if rowIndex == s || rowIndex == e || rowIndex > s && rowIndex < e {
+			return true
+		}
+	}
+	return false
+}
