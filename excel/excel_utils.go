@@ -2,14 +2,17 @@ package utils
 
 import (
 	"fmt"
-	"github.com/xuri/excelize/v2"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type ReadExcelReq struct {
 	FileName  string
+	F         *excelize.File
 	SheetName string
 }
 type ReadExcelResp struct {
@@ -17,18 +20,36 @@ type ReadExcelResp struct {
 	F         *excelize.File
 	RowData   [][]string
 	MergeCell []excelize.MergeCell
+	SheetList []string
 }
 
+func OpenFile(fileName string) (f *excelize.File, err error) {
+	f, err = excelize.OpenFile(fileName)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	return
+}
 func ReadExcel(req *ReadExcelReq) (resp *ReadExcelResp) {
 	var err error
 	resp = &ReadExcelResp{RowData: make([][]string, 0)}
+	if req.F == nil {
+		resp.F, err = OpenFile(req.FileName)
+		if err != nil {
+			resp.Err = err
+			fmt.Println(err)
+			return
+		}
+	} else {
+		resp.F = req.F
+	}
+	resp.SheetList = resp.F.GetSheetList()
 	if req.SheetName == "" {
 		req.SheetName = "Sheet1"
 	}
-	resp.F, err = excelize.OpenFile(req.FileName)
-	if err != nil {
-		resp.Err = err
-		fmt.Println(err)
+	if !slices.Contains(resp.SheetList, req.SheetName) {
+		resp.Err = fmt.Errorf("sheet name %s not exist", req.SheetName)
 		return
 	}
 	resp.MergeCell, resp.Err = resp.F.GetMergeCells(req.SheetName)
@@ -85,12 +106,14 @@ func NumToExcelColumn(n int) string {
 	}
 	return result
 }
-//索引转列名
+
+// 索引转列名
 func ExcelizeIndexToColName(index int) string {
 	var colName string
-	colName,_ = excelize.ColumnNumberToName(index)
+	colName, _ = excelize.ColumnNumberToName(index)
 	return colName
 }
+
 // 合并的单元格排序
 // 示例：[[B100:B104 ] [C100:C104 ] [D100:D104 ] [E100:E104 ] [F100:F104 ] [B105:B107 ]
 func colToNum(col string) int {
@@ -219,6 +242,7 @@ func GetCellValueWithoutStrike(f *excelize.File, sheet, axis string) (string, er
 
 	return result.String(), nil
 }
+
 // 判断单元格是否被合并
 func IsMergeCell(mergeCells []excelize.MergeCell, sheetName, cell string) bool {
 	for _, mergeCell := range mergeCells {
@@ -227,107 +251,4 @@ func IsMergeCell(mergeCells []excelize.MergeCell, sheetName, cell string) bool {
 		}
 	}
 	return false
-}
-// 获取某个单元格（含合并区域）最终值
-func GetMergedCellValue(f *excelize.File, sheet, axis string) (string, error) {
-	mergeCells, err := f.GetMergeCells(sheet)
-	if err != nil {
-		return "", err
-	}
-
-	// 把当前 axis 转成坐标
-	col, row, err := excelize.CellNameToCoordinates(axis)
-	if err != nil {
-		return "", err
-	}
-
-	for _, mc := range mergeCells {
-		start := mc.GetStartAxis()
-		end := mc.GetEndAxis()
-
-		startCol, startRow, _ := excelize.CellNameToCoordinates(start)
-		endCol, endRow, _ := excelize.CellNameToCoordinates(end)
-
-		// 判断是否在合并区域内
-		if col >= startCol && col <= endCol &&
-			row >= startRow && row <= endRow {
-
-			// 返回起始单元格的值
-			return f.GetCellValue(sheet, start)
-		}
-	}
-
-	// 不在合并区域，正常取值
-	return f.GetCellValue(sheet, axis)
-}
-
-// 示例，行数范围是34-89，将其中B列中，单个单元格的值和合并的单元格最终值取出来
-/*
-B34:B36 合并 = OPEN
-B37 = CLOSE
-B38:B40 合并 = RESET
-B43:B67 合并 = OPEN
-
-正确结果应该是：
-OPEN
-CLOSE
-RESET
-OPEN
-*/
-func GetColumnMergedFinalValues(
-	f *excelize.File,
-	sheet string,
-	startRow, endRow int,
-	colIndex int, // 列索引，从1开始，例如 B=2
-) ([]string, error) {
-
-	var result []string
-	mergeCells, err := f.GetMergeCells(sheet)
-	if err != nil {
-		return nil, err
-	}
-
-	// 用于避免同一个合并块被加入多次
-	visitedMerge := make(map[string]bool)
-
-	for row := startRow; row <= endRow; row++ {
-
-		axis, _ := excelize.CoordinatesToCellName(colIndex, row)
-		col, r := colIndex, row
-
-		isMerged := false
-
-		for _, mc := range mergeCells {
-
-			start := mc.GetStartAxis()
-			end := mc.GetEndAxis()
-
-			startCol, startRowM, _ := excelize.CellNameToCoordinates(start)
-			endCol, endRowM, _ := excelize.CellNameToCoordinates(end)
-
-			// 判断当前单元格是否属于这个合并区域
-			if col >= startCol && col <= endCol &&
-				r >= startRowM && r <= endRowM {
-
-				isMerged = true
-
-				// 如果这个合并区域还没加入过
-				if !visitedMerge[start] {
-					val, _ := f.GetCellValue(sheet, start)
-					result = append(result, val)
-					visitedMerge[start] = true
-				}
-
-				break
-			}
-		}
-
-		// 如果不是合并单元格
-		if !isMerged {
-			val, _ := f.GetCellValue(sheet, axis)
-			result = append(result, val)
-		}
-	}
-
-	return result, nil
 }
