@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"net/http"
 	"reflect"
+	"strings"
 )
 
 // 判断结构体是否有值
@@ -120,7 +121,7 @@ func Intersection[T comparable](a, b []T) []T {
 	return res
 }
 
-// 差集 在 A 里但不在 B 里,a = {1,2,3} b={2,4} 结果：{1,3}，将b中没有的元素返回
+// 差集 在 A 里但不在 B 里,a = {1,2,3} b={2,4} 结果：{1,3}，将b没有的元素返回
 func Difference[T comparable](a, b []T) []T {
 	m := make(map[T]struct{}, len(b))
 	res := make([]T, 0)
@@ -133,4 +134,18 @@ func Difference[T comparable](a, b []T) []T {
 		}
 	}
 	return res
+}
+
+// 删除字符串之间的空行
+func RemoveEmptyLines(s string) string {
+	lines := strings.Split(s, "\n")
+	var result []string
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			result = append(result, line)
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
