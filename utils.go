@@ -121,7 +121,7 @@ func Intersection[T comparable](a, b []T) []T {
 	return res
 }
 
-// 差集 在 A 里但不在 B 里,a = {1,2,3} b={2,4} 结果：{1,3}，将b没有的元素返回
+// 差集(返回A有但B没有的,关键是返回B没有的),a = {1,2,3} b={2,4} 结果：{1,3}，将b没有的元素返回
 func Difference[T comparable](a, b []T) []T {
 	m := make(map[T]struct{}, len(b))
 	res := make([]T, 0)
